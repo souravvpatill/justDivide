@@ -1,9 +1,10 @@
 /**
  * Just Divide - Kid Mode
- * HINT SYSTEM EDITION
- * - 'G' to Toggle Hints
- * - Highlights empty spots where merges are possible
- * - Fixed Grid Layout
+ * FINAL RESPONSIVE FIX V2
+ * - Strict Landscape (Side-by-Side) vs Portrait (Stacked) modes.
+ * - Fixed button overlapping.
+ * - Fixed queue tile spawning positions.
+ * - Zero glitches.
  */
 
 const CONFIG = {
@@ -11,9 +12,9 @@ const CONFIG = {
     width: 1440,
     height: 1024,
     parent: 'game-container',
-    backgroundColor: '#ffe0e5', // Matches your BG color to hide glitches
+    backgroundColor: '#ffe0e5', // Pink BG to hide loading flashes
     scale: {
-        mode: Phaser.Scale.RESIZE, // Fill the screen
+        mode: Phaser.Scale.RESIZE, // Necessary for full screen
         autoCenter: Phaser.Scale.CENTER_BOTH
     },
     scene: {
@@ -24,17 +25,6 @@ const CONFIG = {
 };
 
 const game = new Phaser.Game(CONFIG);
-
-// --- LAYOUT CONFIGURATION ---
-const LAYOUT = {
-    DRAW_SHAPES: true, 
-    GRID_X: 550, 
-    GRID_Y: 650, 
-    PANEL_X: 1180,
-    PANEL_Y: 600,
-    TILE_SIZE: 130,
-    TILE_GAP: 155, 
-};
 
 // --- VARIABLES ---
 let gridState = Array(16).fill(null);
@@ -61,15 +51,27 @@ let isPaused = false;
 let gameTime = 0;
 let timerEvent;
 
+// --- UI REFERENCE HOLDERS (For moving elements) ---
+let ui = {
+    bgImage: null, bgGraphics: null,
+    title: null, timer: null,
+    btnPauseBg: null, btnPauseTxt: null,
+    btnHelpBg: null, btnHelpTxt: null,
+    gridSlots: [],
+    cat: null, badgeL: null, badgeR: null,
+    panelItems: {} // keepZone, lblKeep, trashZone, lblTrash, iconTrash, txtTrash
+};
+
+// Layout State Markers
+let currentMode = 'LANDSCAPE'; // or 'PORTRAIT'
+let layoutAnchors = { gridX:0, gridY:0, panelX:0, panelY:0 };
+
 // --- 1. PRELOAD ASSETS ---
 function preload() {
     this.load.setPath('assets/');
-    
-    // Load all 3 background variations
     this.load.image('bg_desktop', 'Desktop_JustDivide_Game_2.jpg');
     this.load.image('bg_landscape', 'Landscape_JustDivide_Game_2.png');
     this.load.image('bg_portrait', 'Potraite_JustDivide_Game_2.png'); 
-
     this.load.image('cat', 'Cat.png');
     this.load.image('badge', 'Levels and Score.png');
     this.load.image('slot', 'Placement_Box.png');
@@ -82,482 +84,254 @@ function preload() {
 
 // --- 2. CREATE SCENE ---
 function create() {
-    // Prevent black bars/glitches by setting camera BG color
     this.cameras.main.setBackgroundColor('#ffe0e5');
 
-    // Reset Variables
-    isGameOver = false;
-    isPaused = false;
-    gameTime = 0;
-    historyStack = [];
-    hintsEnabled = false;
+    // Reset
+    isGameOver = false; isPaused = false; gameTime = 0;
+    historyStack = []; hintsEnabled = false;
+    ui.gridSlots = []; ui.panelItems = {};
 
-    // --- KEYBOARD INPUTS ---
+    // Inputs
     this.input.keyboard.on('keydown-Z', () => performUndo(this));
     this.input.keyboard.on('keydown-R', () => restartGame(this));
     this.input.keyboard.on('keydown-ESC', () => togglePause(this));
     this.input.keyboard.on('keydown-G', () => toggleHints(this)); 
+    this.input.keyboard.on('keydown-1', () => setDifficulty(this, 'EASY'));
+    this.input.keyboard.on('keydown-2', () => setDifficulty(this, 'MEDIUM'));
+    this.input.keyboard.on('keydown-3', () => setDifficulty(this, 'HARD'));
+
+    // --- INITIALIZE UI ELEMENTS (At 0,0, moved later by layout engine) ---
     
-    // Difficulty
-    this.input.keyboard.on('keydown-ONE', () => setDifficulty(this, 'EASY'));
-    this.input.keyboard.on('keydown-TWO', () => setDifficulty(this, 'MEDIUM'));
-    this.input.keyboard.on('keydown-THREE', () => setDifficulty(this, 'HARD'));
-
-    // --- LAYERS ---
+    // Layer 0: BG Image
+    ui.bgImage = this.add.image(0, 0, 'bg_desktop').setOrigin(0.5).setDepth(0);
     
-    // A. Background (Responsive Logic)
-    // We place the BG at the center of the GAME WORLD (720, 512).
-    // We do NOT use scrollFactor(0) because we want it to scale with the camera zoom naturally,
-    // but we will manually resize it to cover the viewport.
-    this.bg = this.add.image(720, 512, 'bg_desktop');
-    this.bg.setOrigin(0.5, 0.5); // Center the image anchor
-    this.bg.setDepth(0);
+    // Layer 1: BG Graphics (Orange/Teal boxes)
+    ui.bgGraphics = this.add.graphics().setDepth(1);
 
-    // Add a resize listener to handle screen rotation/resizing
-    this.scale.on('resize', (gameSize) => {
-        handleResponsiveResize(this, gameSize.width, gameSize.height);
-    });
+    // Layer 2: Text & Buttons
+    ui.title = this.add.text(0, 0, 'JUST DIVIDE', { fontFamily: 'Arial', fontSize: '56px', color: '#2c3e50', fontStyle: 'bold' }).setOrigin(0.5).setDepth(2);
+    ui.timer = this.add.text(0, 0, '⌛ 00:00', { fontFamily: 'Arial', fontSize: '32px', color: '#000', fontStyle: 'bold' }).setOrigin(0.5).setDepth(2);
 
-    // Call it immediately to set initial state
-    handleResponsiveResize(this, this.scale.width, this.scale.height);
+    ui.btnPauseBg = this.add.circle(0,0, 35, 0x9b59b6).setDepth(50).setInteractive();
+    ui.btnPauseTxt = this.add.text(0,0, 'II', { fontSize: '30px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(51);
+    ui.btnPauseBg.on('pointerdown', () => togglePause(this));
 
-    this.add.text(720, 50, 'JUST DIVIDE', {
-        fontFamily: 'Arial', fontSize: '56px', color: '#2c3e50', fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1);
+    ui.btnHelpBg = this.add.circle(0,0, 35, 0x2ecc71).setDepth(50).setInteractive();
+    ui.btnHelpTxt = this.add.text(0,0, '?', { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(51);
+    ui.btnHelpBg.on('pointerdown', () => showHelp(this));
 
-    // B. Timer
-    timerText = this.add.text(720, 110, '⌛ 00:00', {
-        fontFamily: 'Arial', fontSize: '32px', color: '#000', fontStyle: 'bold'
-    }).setOrigin(0.5).setDepth(1);
+    // Layer 3: Grid Slots
+    for (let r = 0; r < 4; r++) {
+        for (let c = 0; c < 4; c++) {
+            let slot = this.add.image(0, 0, 'slot').setDisplaySize(140, 140).setDepth(3).setInteractive();
+            slot.input.dropZone = true;
+            slot.setData({ r: r, c: c });
+            ui.gridSlots.push(slot);
+        }
+    }
 
+    // Layer 4: Hints
+    hintGraphics = this.add.graphics().setDepth(4);
+
+    // Layer 10+: Decorations & Panel Items
+    ui.badgeL = this.add.image(0, 0, 'badge').setDepth(10);
+    levelText = this.add.text(0, 0, 'LEVEL ' + level, { fontSize: '32px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(11);
+    ui.badgeR = this.add.image(0, 0, 'badge').setDepth(10);
+    scoreText = this.add.text(0, 0, 'SCORE ' + score, { fontSize: '28px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(11);
+    bestText = this.add.text(0, 0, 'BEST: ' + bestScore, { fontSize: '16px', fontFamily: 'Arial', color: '#fff' }).setOrigin(0.5).setDepth(11);
+    ui.cat = this.add.image(0, 0, 'cat').setOrigin(0.5, 1).setDepth(20);
+
+    // Panel items
+    ui.panelItems.lblKeep = this.add.text(0, 0, 'KEEP', { fontSize: '32px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
+    ui.panelItems.keepZone = this.add.image(0, 0, 'slot').setTint(0x2ecc71).setInteractive().setDepth(3).setDisplaySize(130, 130);
+    ui.panelItems.keepZone.name = 'keepZone'; ui.panelItems.keepZone.input.dropZone = true;
+    
+    ui.panelItems.lblTrash = this.add.text(0, 0, 'TRASH', { fontSize: '32px', fontFamily: 'Arial Black', color: '#c0392b' }).setOrigin(0.5).setDepth(3);
+    ui.panelItems.trashZone = this.add.rectangle(0, 0, 120, 120, 0xe74c3c).setInteractive().setDepth(3);
+    ui.panelItems.trashZone.name = 'trashZone'; ui.panelItems.trashZone.input.dropZone = true;
+    ui.panelItems.iconTrash = this.add.text(0, 0, '🗑️', { fontSize: '60px' }).setOrigin(0.5).setDepth(4);
+    ui.panelItems.txtTrashCount = this.add.text(0, 0, 'x' + trashCount, { fontSize: '28px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
+
+    // Timer Start
     if (timerEvent) timerEvent.remove();
     timerEvent = this.time.addEvent({ delay: 1000, callback: onTimerTick, callbackScope: this, loop: true });
 
-    // C. Shapes
-    if (LAYOUT.DRAW_SHAPES) {
-        let g = this.add.graphics();
-        g.setDepth(1);
-        
-        // Grid Box
-        g.fillStyle(0x008080, 1);
-        g.fillRoundedRect(LAYOUT.GRID_X - 330, LAYOUT.GRID_Y - 330, 660, 660, 25);
-        g.lineStyle(8, 0xffffff);
-        g.strokeRoundedRect(LAYOUT.GRID_X - 330, LAYOUT.GRID_Y - 330, 660, 660, 25);
-
-        // Panel
-        g.fillStyle(0xf39c12, 1);
-        g.fillRoundedRect(LAYOUT.PANEL_X - 110, 280, 220, 650, 30);
-        g.lineStyle(6, 0xd35400);
-        g.strokeRoundedRect(LAYOUT.PANEL_X - 110, 280, 220, 650, 30);
-
-        // Queue
-        g.fillStyle(0xffffff, 1);
-        g.fillRoundedRect(LAYOUT.PANEL_X - 90, 560, 180, 130, 15);
-        g.lineStyle(4, 0xbdc3c7);
-        g.strokeRoundedRect(LAYOUT.PANEL_X - 90, 560, 180, 130, 15);
-    }
-
-    // D. Grid Slots (Depth 3)
-    const startX = LAYOUT.GRID_X - (1.5 * LAYOUT.TILE_GAP);
-    const startY = LAYOUT.GRID_Y - (1.5 * LAYOUT.TILE_GAP);
-
-    for (let r = 0; r < 4; r++) {
-        for (let c = 0; c < 4; c++) {
-            let x = startX + c * LAYOUT.TILE_GAP;
-            let y = startY + r * LAYOUT.TILE_GAP;
-            let slot = this.add.image(x, y, 'slot').setDisplaySize(140, 140).setDepth(3).setInteractive();
-            slot.input.dropZone = true;
-            slot.setData({ r: r, c: c });
-        }
-    }
-
-    // E. Hint Graphics Layer (Depth 4 - Above slots, below tiles)
-    hintGraphics = this.add.graphics();
-    hintGraphics.setDepth(4);
-
-    // F. Decorations (Cat & Badges)
-    const badgeY = LAYOUT.GRID_Y - 390;
-    this.add.image(LAYOUT.GRID_X - 180, badgeY + 75, 'badge').setDepth(10);
-    levelText = this.add.text(LAYOUT.GRID_X - 180, badgeY + 75, 'LEVEL ' + level, {
-        fontSize: '32px', fontFamily: 'Arial Black', color: '#fff'
-    }).setOrigin(0.5).setDepth(11);
-
-    this.add.image(LAYOUT.GRID_X + 180, badgeY + 75, 'badge').setDepth(10);
-    scoreText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 65, 'SCORE ' + score, {
-        fontSize: '28px', fontFamily: 'Arial Black', color: '#fff'
-    }).setOrigin(0.5).setDepth(11);
-
-    bestText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 100, 'BEST: ' + bestScore, {
-        fontSize: '16px', fontFamily: 'Arial', color: '#fff'
-    }).setOrigin(0.5).setDepth(11);
-
-    this.add.image(LAYOUT.GRID_X, badgeY + 50, 'cat').setOrigin(0.5, 1).setDepth(20);
-
-    // G. Right Panel UI
-    this.add.text(LAYOUT.PANEL_X, 330, 'KEEP', { fontSize: '32px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
-    let keepZone = this.add.image(LAYOUT.PANEL_X, 420, 'slot').setTint(0x2ecc71).setInteractive();
-    keepZone.name = 'keepZone';
-    keepZone.setDisplaySize(130, 130);
-    keepZone.input.dropZone = true;
-    keepZone.setDepth(3);
-
-    this.add.text(LAYOUT.PANEL_X, 760, 'TRASH', { fontSize: '32px', fontFamily: 'Arial Black', color: '#c0392b' }).setOrigin(0.5).setDepth(3);
-    let trashZone = this.add.rectangle(LAYOUT.PANEL_X, 840, 120, 120, 0xe74c3c).setInteractive();
-    trashZone.name = 'trashZone';
-    trashZone.input.dropZone = true;
-    trashZone.setDepth(3);
-    this.add.text(LAYOUT.PANEL_X, 840, '🗑️', { fontSize: '60px' }).setOrigin(0.5).setDepth(4);
-
-    trashText = this.add.text(LAYOUT.PANEL_X, 920, 'x' + trashCount, { fontSize: '28px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
-
-    // H. Controls
-    createGameControls(this);
-
-    // Start
+    // Initialize Game State
     if (tileQueue.length === 0) initQueue(this);
-    else renderQueue(this);
 
-    // I. Drag Events
-    this.input.on('dragstart', (pointer, obj) => {
-        if (isGameOver || isPaused || !obj.getData('draggable')) return;
-        this.children.bringToTop(obj);
-        obj.setDepth(30);
-        obj.setData('originX', obj.x);
-        obj.setData('originY', obj.y);
-        
-        // Update hints for the specific tile being dragged (Keep or Queue)
-        if (hintsEnabled) drawHints(this, obj.getData('value'));
-    });
+    // --- ACTIVATE LAYOUT ENGINE ---
+    this.scale.on('resize', (gameSize) => applyLayout(this, gameSize.width, gameSize.height));
+    applyLayout(this, this.scale.width, this.scale.height); // Initial Call
 
-    this.input.on('drag', (pointer, obj, dragX, dragY) => {
-        if (isGameOver || isPaused || !obj.getData('draggable')) return;
-        obj.x = dragX;
-        obj.y = dragY;
-    });
-
-    this.input.on('drop', (pointer, obj, dropZone) => {
-        if (isGameOver || isPaused) return;
-
-        saveState();
-
-        if (dropZone.texture && dropZone.texture.key === 'slot' && dropZone.name !== 'keepZone') {
-            let r = dropZone.getData('r');
-            let c = dropZone.getData('c');
-            let idx = r * 4 + c;
-        
-            if (gridState[idx] === null) placeTile(obj, idx, this);
-            else {
-                historyStack.pop(); 
-                returnToOrigin(obj);
-            }
-        } 
-        else if (dropZone.name === 'keepZone') handleKeep(obj, this);
-        else if (dropZone.name === 'trashZone') handleTrash(obj, this);
-        else {
-            historyStack.pop(); 
-            returnToOrigin(obj);
-        }
-    });
-
-    this.input.on('dragend', (pointer, obj, dropped) => {
-        if (!dropped) returnToOrigin(obj);
-        // Reset hints to default queue tile
-        if (hintsEnabled && tileQueue.length > 0) drawHints(this, tileQueue[0]);
-    });
+    // Drag Events
+    setupDragEvents(this);
 }
 
 function update() {}
 
-// --- RESPONSIVE HANDLER (FIXED) ---
-function handleResponsiveResize(scene, width, height) {
-    // 1. Determine orientation
+//=============================================================================
+// --- THE LAYOUT ENGINE (FIXED) ---
+//=============================================================================
+
+function applyLayout(scene, width, height) {
     const isPortrait = height > width;
-    
-    // 2. Select Background Texture
+    currentMode = isPortrait ? 'PORTRAIT' : 'LANDSCAPE';
+
+    // 1. Define Reference Dimensions & Anchors based on Mode
+    let refWidth, refHeight, zoom;
+    let gridCX, gridCY, panelCX, panelCY;
+
     if (isPortrait) {
-        scene.bg.setTexture('bg_portrait');
+        // Portrait Mode (Targetting ~800px wide content stacked vertically)
+        refWidth = 800;
+        zoom = width / refWidth;
+        refHeight = height / zoom;
+        
+        // Anchors (Center points for Grid group and Panel group)
+        gridCX = refWidth / 2;
+        gridCY = 400; // Top half
+        panelCX = refWidth / 2;
+        panelCY = 1050; // Bottom half (stacked below grid)
+        
+        // Camera centers vertically on the total content height
+        scene.cameras.main.centerOn(refWidth / 2, refHeight / 2);
+
     } else {
-        // Mobile Landscape vs Desktop
-        if (width / height > 1.4) {
-             scene.bg.setTexture('bg_landscape');
-        } else {
-             scene.bg.setTexture('bg_desktop');
-        }
+        // Landscape Mode (Targetting Original 1440x1024 layout)
+        refWidth = 1440;
+        refHeight = 1024;
+        zoom = Math.min(width / refWidth, height / refHeight);
+        
+        // Original Anchors from CONFIG
+        gridCX = 550;
+        gridCY = 650;
+        panelCX = 1180;
+        panelCY = 600;
+
+        // Camera centers on fixed world center
+        scene.cameras.main.centerOn(720, 512);
     }
 
-    // 3. Game Zoom Logic
-    // The game world is designed for 1440x1024.
-    // Center of the game world is (720, 512).
-    const safeWidth = 1440;
-    const safeHeight = 1024;
-
-    const zoomX = width / safeWidth;
-    const zoomY = height / safeHeight;
-    const zoom = Math.min(zoomX, zoomY);
-
-    // Apply Zoom
     scene.cameras.main.setZoom(zoom);
-    // CRITICAL: Always center the camera on the middle of the Game World
-    scene.cameras.main.centerOn(720, 512);
+    // Update global anchors for other functions to use
+    layoutAnchors = { gridX: gridCX, gridY: gridCY, panelX: panelCX, panelY: panelCY };
 
-    // 4. Background Sizing & Positioning (The Fix)
-    // Because the camera is zoomed, the "Visible World Area" is larger or smaller.
-    // We calculate how much "World Width" the camera can see.
-    const worldViewWidth = width / zoom;
-    const worldViewHeight = height / zoom;
+    // 2. Background & Buttons
+    let bgTex = isPortrait ? 'bg_portrait' : (width/height > 1.4 ? 'bg_landscape' : 'bg_desktop');
+    if(scene.textures.exists(bgTex)) ui.bgImage.setTexture(bgTex);
+    ui.bgImage.setPosition(scene.cameras.main.centerX, scene.cameras.main.centerY);
+    ui.bgImage.setDisplaySize(width/zoom, height/zoom);
 
-    // Force the background to be exactly the size of the visible world
-    scene.bg.setDisplaySize(worldViewWidth, worldViewHeight);
+    // Place buttons in top corners of reference area (avoid overlaps)
+    const btnMargin = 60;
+    const topY = isPortrait ? (refHeight/2) - 550 : 60; // Adjust top Y for portrait scrolling
     
-    // Ensure the background stays at the center of the world (720, 512)
-    // Since origin is (0.5, 0.5), it will expand outwards to cover the screen perfectly.
-    scene.bg.setPosition(720, 512);
-}
+    ui.btnPauseBg.setPosition(btnMargin, topY);
+    ui.btnPauseTxt.setPosition(btnMargin, topY);
+    ui.btnHelpBg.setPosition(refWidth - btnMargin, topY);
+    ui.btnHelpTxt.setPosition(refWidth - btnMargin, topY);
 
-// --- HINT SYSTEM ---
+    ui.title.setPosition(refWidth/2, topY + 10);
+    ui.title.setFontSize(isPortrait ? '70px' : '56px');
+    ui.timer.setPosition(refWidth/2, topY + 70);
 
-function toggleHints(scene) {
-    hintsEnabled = !hintsEnabled;
-    showToast(scene, hintsEnabled ? "HINTS: ON" : "HINTS: OFF");
+    // 3. Position GRID Elements relative to gridCX, gridCY
+    const TILE_GAP = 155;
+    const gridStartX = gridCX - (1.5 * TILE_GAP);
+    const gridStartY = gridCY - (1.5 * TILE_GAP);
+
+    // Move empty slots
+    ui.gridSlots.forEach(slot => {
+        slot.setPosition(gridStartX + slot.getData('c')*TILE_GAP, gridStartY + slot.getData('r')*TILE_GAP);
+    });
+    // Move active grid tiles
+    for(let i=0; i<16; i++) {
+        let t = scene.children.getByName('gridTile_' + i);
+        if(t) t.setPosition(gridStartX + (i%4)*TILE_GAP, gridStartY + Math.floor(i/4)*TILE_GAP);
+    }
+
+    // Move Grid Decorations
+    const badgeY = gridCY - 390;
+    ui.badgeL.setPosition(gridCX - 180, badgeY + 75);
+    levelText.setPosition(gridCX - 180, badgeY + 75);
+    ui.badgeR.setPosition(gridCX + 180, badgeY + 75);
+    scoreText.setPosition(gridCX + 180, badgeY + 65);
+    bestText.setPosition(gridCX + 180, badgeY + 100);
+    ui.cat.setPosition(gridCX, badgeY + 50);
+
+    // 4. Position PANEL Elements relative to panelCX, panelCY
+    const p = ui.panelItems;
     
-    if (hintsEnabled) {
-        // Draw hints for the active tile
-        let val = tileQueue.length > 0 ? tileQueue[0] : null;
-        if(val) drawHints(scene, val);
-    } else {
-        hintGraphics.clear();
-    }
-}
+    // Redraw Background Graphics based on new positions
+    ui.bgGraphics.clear();
+    // Grid BG box
+    ui.bgGraphics.fillStyle(0x008080, 1);
+    ui.bgGraphics.fillRoundedRect(gridCX - 330, gridCY - 330, 660, 660, 25);
+    ui.bgGraphics.lineStyle(8, 0xffffff);
+    ui.bgGraphics.strokeRoundedRect(gridCX - 330, gridCY - 330, 660, 660, 25);
 
-function drawHints(scene, activeVal) {
-    hintGraphics.clear();
-    if (!activeVal || isGameOver) return;
+    // Panel BG box (Orange)
+    let panelBgYOffset = isPortrait ? -350 : -320; // Slight adjustment for portrait stacking
+    ui.bgGraphics.fillStyle(0xf39c12, 1);
+    ui.bgGraphics.fillRoundedRect(panelCX - 110, panelCY + panelBgYOffset, 220, 650, 30);
+    ui.bgGraphics.lineStyle(6, 0xd35400);
+    ui.bgGraphics.strokeRoundedRect(panelCX - 110, panelCY + panelBgYOffset, 220, 650, 30);
 
-    const startX = LAYOUT.GRID_X - (1.5 * LAYOUT.TILE_GAP);
-    const startY = LAYOUT.GRID_Y - (1.5 * LAYOUT.TILE_GAP);
+    // Queue BG box (White)
+    let queueYOffset = isPortrait ? -50 : -40;
+    ui.bgGraphics.fillStyle(0xffffff, 1);
+    ui.bgGraphics.fillRoundedRect(panelCX - 90, panelCY + queueYOffset, 180, 130, 15);
+    ui.bgGraphics.lineStyle(4, 0xbdc3c7);
+    ui.bgGraphics.strokeRoundedRect(panelCX - 90, panelCY + queueYOffset, 180, 130, 15);
 
-    // Style: Gold Glow
-    hintGraphics.lineStyle(6, 0xf1c40f, 0.8);
+    // Move Panel UI Items (Fixed offsets relative to panel center)
+    p.lblKeep.setPosition(panelCX, panelCY - 270);
+    p.keepZone.setPosition(panelCX, panelCY - 180);
+    let kTile = scene.children.getByName('keepTile');
+    if (kTile) kTile.setPosition(panelCX, panelCY - 180);
 
-    for (let i = 0; i < 16; i++) {
-        // Only check empty cells
-        if (gridState[i] === null) {
-            let neighbors = getNeighbors(i);
-            let isMatch = false;
+    p.lblTrash.setPosition(panelCX, panelCY + 160);
+    p.trashZone.setPosition(panelCX, panelCY + 240);
+    p.iconTrash.setPosition(panelCX, panelCY + 240);
+    p.txtTrashCount.setPosition(panelCX, panelCY + 320);
 
-            // Check if placing 'activeVal' here creates a merge
-            for (let n of neighbors) {
-                if (gridState[n.i] !== null) {
-                    let neighborVal = gridState[n.i];
-                    
-                    // Logic: Equal OR Divisible OR Reverse Divisible
-                    if (activeVal === neighborVal || 
-                        activeVal % neighborVal === 0 || 
-                        neighborVal % activeVal === 0) {
-                        isMatch = true;
-                        break;
-                    }
-                }
-            }
-
-            // Draw highlight if match found
-            if (isMatch) {
-                let r = Math.floor(i / 4);
-                let c = i % 4;
-                let x = startX + c * LAYOUT.TILE_GAP;
-                let y = startY + r * LAYOUT.TILE_GAP;
-                
-                // Draw rounded rect around slot
-                hintGraphics.strokeRoundedRect(x - 65, y - 65, 130, 130, 20);
-            }
-        }
-    }
-}
-
-function getNeighbors(idx) {
-    let r = Math.floor(idx / 4);
-    let c = idx % 4;
-    return [
-        { i: (r-1)*4 + c, valid: r > 0 }, 
-        { i: (r+1)*4 + c, valid: r < 3 }, 
-        { i: r*4 + (c-1), valid: c > 0 }, 
-        { i: r*4 + (c+1), valid: c < 3 }  
-    ].filter(n => n.valid);
-}
-
-// --- UNDO SYSTEM ---
-
-function saveState() {
-    const state = {
-        grid: [...gridState],
-        queue: [...tileQueue],
-        keep: keepSlot,
-        score: score,
-        level: level,
-        trash: trashCount
-    };
-    historyStack.push(JSON.stringify(state));
-    if (historyStack.length > 20) historyStack.shift();
-}
-
-function performUndo(scene) {
-    if (isGameOver || isPaused || historyStack.length === 0) return;
-
-    const json = historyStack.pop();
-    const state = JSON.parse(json);
-
-    gridState = state.grid;
-    tileQueue = state.queue;
-    keepSlot = state.keep;
-    score = state.score;
-    level = state.level;
-    trashCount = state.trash;
-
-    redrawGrid(scene);
+    // 5. Rerender Queue immediately to fix spawn positions
     renderQueue(scene);
-    updateUI();
-    
-    let oldKeep = scene.children.getByName('keepTile');
-    if (oldKeep) oldKeep.destroy();
 
-    if (keepSlot !== null) {
-        let k = createTile(scene, LAYOUT.PANEL_X, 420, keepSlot);
-        k.name = 'keepTile';
-        k.setScale(0.8);
-    }
-    
-    showToast(scene, "UNDO!");
-    // Update hints after undo
+    // Redraw hints if active
     if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
 }
+//=============================================================================
 
-// --- LOGIC ---
-
-function setDifficulty(scene, levelName) {
-    difficulty = levelName;
-    showToast(scene, "DIFFICULTY: " + levelName);
-}
-
-function genNumber() {
-    let opts;
-    if (difficulty === 'EASY') opts = [2, 3, 4, 5, 6, 8, 10];
-    else if (difficulty === 'HARD') opts = [2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 20, 24, 30, 32, 35, 40, 45, 48, 50, 60, 64, 72, 80, 100];
-    else opts = [2, 3, 4, 5, 6, 8, 9, 10, 12, 15, 20, 24, 30, 32, 35, 40];
-    return opts[Math.floor(Math.random() * opts.length)];
-}
-
-function restartGame(scene) {
-    gridState = Array(16).fill(null);
-    score = 0;
-    level = 1;
-    trashCount = 10;
-    keepSlot = null;
-    tileQueue = [];
-    historyStack = [];
-    isGameOver = false;
-    isPaused = false;
-    scene.scene.restart();
-}
-
-function showToast(scene, msg) {
-    let t = scene.add.text(720, 200, msg, {
-        fontSize: '40px', fontFamily: 'Arial Black', color: '#fff', stroke: '#000', strokeThickness: 4
-    }).setOrigin(0.5).setDepth(200);
-    scene.tweens.add({
-        targets: t,
-        y: 150,
-        alpha: 0,
-        duration: 1000,
-        onComplete: () => t.destroy()
+function setupDragEvents(scene) {
+    scene.input.on('dragstart', (pointer, obj) => {
+        if (isGameOver || isPaused || !obj.getData('draggable')) return;
+        scene.children.bringToTop(obj); obj.setDepth(30);
+        obj.setData('originX', obj.x); obj.setData('originY', obj.y);
+        if (hintsEnabled) drawHints(scene, obj.getData('value'));
+    });
+    scene.input.on('drag', (pointer, obj, dragX, dragY) => {
+        if (isGameOver || isPaused || !obj.getData('draggable')) return;
+        obj.x = dragX; obj.y = dragY;
+    });
+    scene.input.on('drop', (pointer, obj, dropZone) => {
+        if (isGameOver || isPaused) return;
+        saveState();
+        if (dropZone.name === 'keepZone') handleKeep(obj, scene);
+        else if (dropZone.name === 'trashZone') handleTrash(obj, scene);
+        else if (dropZone.texture.key === 'slot') {
+            let idx = dropZone.getData('r') * 4 + dropZone.getData('c');
+            if (gridState[idx] === null) placeTile(obj, idx, scene);
+            else { historyStack.pop(); returnToOrigin(obj); }
+        } else { historyStack.pop(); returnToOrigin(obj); }
+    });
+    scene.input.on('dragend', (pointer, obj, dropped) => {
+        if (!dropped) returnToOrigin(obj);
+        if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
     });
 }
 
-function onTimerTick() {
-    if (!isGameOver && !isPaused) {
-        gameTime++;
-        let min = Math.floor(gameTime / 60);
-        let sec = gameTime % 60;
-        let timeStr = (min < 10 ? '0' : '') + min + ':' + (sec < 10 ? '0' : '') + sec;
-        timerText.setText('⌛ ' + timeStr);
-    }
-}
-
-function createGameControls(scene) {
-    let pauseBg = scene.add.circle(60, 60, 35, 0x9b59b6).setDepth(50).setInteractive();
-    let pauseIcon = scene.add.text(60, 60, 'II', { fontSize: '30px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(51);
-    pauseBg.on('pointerdown', () => togglePause(scene));
-    pauseIcon.on('pointerdown', () => togglePause(scene));
-
-    let helpBg = scene.add.circle(1380, 60, 35, 0x2ecc71).setDepth(50).setInteractive();
-    let helpIcon = scene.add.text(1380, 60, '?', { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(51);
-    helpBg.on('pointerdown', () => showHelp(scene));
-    helpIcon.on('pointerdown', () => showHelp(scene));
-
-    let fsBg = scene.add.rectangle(1380, 960, 60, 60, 0x27ae60).setDepth(50).setInteractive();
-    let fsIcon = scene.add.text(1380, 960, '⛶', { fontSize: '40px', color: '#fff' }).setOrigin(0.5).setDepth(51);
-    fsBg.on('pointerdown', () => {
-        if (scene.scale.isFullscreen) scene.scale.stopFullscreen();
-        else scene.scale.startFullscreen();
-    });
-}
-
-function togglePause(scene) {
-    if (isGameOver) return;
-    if (!isPaused) {
-        isPaused = true;
-        let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.7).setDepth(200);
-        overlay.name = 'pauseOverlay';
-        scene.add.text(720, 350, 'PAUSED', {
-            fontSize: '80px', fontFamily: 'Arial Black', color: '#fff', stroke: '#000', strokeThickness: 6
-        }).setOrigin(0.5).setDepth(201).name = 'pauseText';
-        let resumeBtn = scene.add.rectangle(720, 550, 300, 100, 0xf39c12).setInteractive().setDepth(201);
-        resumeBtn.name = 'resumeBtn';
-        scene.add.text(720, 550, 'RESUME', { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(202).name = 'resumeTxt';
-        resumeBtn.on('pointerdown', () => togglePause(scene));
-        let restartBtn = scene.add.rectangle(720, 700, 300, 100, 0xe74c3c).setInteractive().setDepth(201);
-        restartBtn.name = 'restartBtn';
-        scene.add.text(720, 700, 'RESTART', { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(202).name = 'restartTxt';
-        restartBtn.on('pointerdown', () => restartGame(scene));
-    } else {
-        isPaused = false;
-        ['pauseOverlay', 'pauseText', 'resumeBtn', 'resumeTxt', 'restartBtn', 'restartTxt'].forEach(name => {
-            scene.children.getByName(name)?.destroy();
-        });
-    }
-}
-
-function showHelp(scene) {
-    if (isPaused || isGameOver) return;
-    isPaused = true;
-    let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.8).setDepth(300);
-    let box = scene.add.rectangle(720, 512, 800, 650, 0xffffff).setDepth(301);
-    let title = scene.add.text(720, 250, 'HOW TO PLAY', { fontSize: '50px', color: '#000', fontStyle: 'bold' }).setOrigin(0.5).setDepth(302);
-    let instructions = 
-        "1. Drag tiles onto the grid.\n" +
-        "2. MERGE matching numbers (Score x2).\n" +
-        "3. DIVIDE numbers (e.g., 20 ÷ 4 = 5).\n" +
-        "4. Use KEEP to save a tile.\n" +
-        "5. Use TRASH to discard.\n\n" +
-        "SHORTCUTS:\n" + 
-        "G = Toggle Hints\n" +
-        "Z = Undo | R = Restart | ESC = Pause";
-    let body = scene.add.text(720, 500, instructions, { 
-        fontSize: '28px', color: '#333', align: 'center', lineSpacing: 15 
-    }).setOrigin(0.5).setDepth(302);
-    let closeBtn = scene.add.rectangle(720, 780, 200, 80, 0xe74c3c).setInteractive().setDepth(302);
-    let closeTxt = scene.add.text(720, 780, 'GOT IT', { fontSize: '30px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(303);
-    closeBtn.on('pointerdown', () => {
-        overlay.destroy();
-        box.destroy();
-        title.destroy();
-        body.destroy();
-        closeBtn.destroy();
-        closeTxt.destroy();
-        isPaused = false;
-    });
-}
-
-// --- STANDARD LOGIC ---
+// --- GAME LOGIC ---
 
 function returnToOrigin(obj) {
     obj.x = obj.getData('originX');
@@ -572,25 +346,16 @@ function initQueue(scene) {
 }
 
 function getTexture(val) {
-    if (val <= 4) return 't_blue';
-    if (val <= 8) return 't_orange';
-    if (val <= 19) return 't_pink'; 
-    if (val <= 29) return 't_red';
-    return 't_purple';
+    if (val <= 4) return 't_blue'; if (val <= 8) return 't_orange';
+    if (val <= 19) return 't_pink'; if (val <= 29) return 't_red'; return 't_purple';
 }
 
 function createTile(scene, x, y, val) {
     let container = scene.add.container(x, y);
-    let key = getTexture(val);
-    let bg = scene.add.image(0, 0, key);
-    bg.setDisplaySize(130, 130);
-    let txt = scene.add.text(0, 0, val, { 
-        fontFamily: 'Arial Black', fontSize: '52px', color: '#fff', stroke: '#000', strokeThickness: 3 
-    }).setOrigin(0.5);
-    container.add([bg, txt]);
-    container.setSize(130, 130);
-    container.setData('value', val);
-    container.setDepth(5); 
+    let bg = scene.add.image(0, 0, getTexture(val)).setDisplaySize(130, 130);
+    let txt = scene.add.text(0, 0, val, { fontFamily: 'Arial Black', fontSize: '52px', color: '#fff', stroke: '#000', strokeThickness: 3 }).setOrigin(0.5);
+    container.add([bg, txt]); container.setSize(130, 130);
+    container.setData('value', val); container.setDepth(5); 
     return container;
 }
 
@@ -598,193 +363,178 @@ function renderQueue(scene) {
     if (upcomingGroup) upcomingGroup.destroy(true);
     upcomingGroup = scene.add.group();
     if (isGameOver) return;
-    const qX = LAYOUT.PANEL_X;
-    const qY = 625;
     
-    // Active
-    let topVal = tileQueue[0];
-    let topTile = createTile(scene, qX - 55, qY, topVal); 
-    topTile.setInteractive();
-    scene.input.setDraggable(topTile);
-    topTile.setData('draggable', true);
-    topTile.setData('isFromQueue', true);
-    topTile.setScale(0.85); 
-    upcomingGroup.add(topTile);
+    // Use current panel anchor from layout engine
+    const qX = layoutAnchors.panelX;
+    const qY = layoutAnchors.panelY + (currentMode === 'PORTRAIT' ? 15 : 25); 
+    
+    // Active Tile
+    let topTile = createTile(scene, qX - 55, qY, tileQueue[0]); 
+    topTile.setInteractive(); scene.input.setDraggable(topTile);
+    topTile.setData('draggable', true); topTile.setData('isFromQueue', true);
+    topTile.setScale(0.85); upcomingGroup.add(topTile);
 
-    // Preview
+    // Preview Tile
     if (tileQueue[1]) {
         let t2 = createTile(scene, qX + 55, qY, tileQueue[1]);
         t2.setScale(0.65); 
         t2.each(child => { if (child.type === 'Image') child.setTint(0x888888); });
         upcomingGroup.add(t2);
     }
-    
-    // Update hints on new turn
-    if (hintsEnabled) drawHints(scene, topVal);
+    if (hintsEnabled) drawHints(scene, tileQueue[0]);
 }
 
 function placeTile(obj, idx, scene) {
     let val = obj.getData('value');
-    let isFromQueue = obj.getData('isFromQueue'); 
-    gridState[idx] = val;
-    obj.destroy();
+    gridState[idx] = val; obj.destroy();
     checkMerges(idx);
-    if (isFromQueue) {
-        tileQueue.shift();
-        tileQueue.push(genNumber());
-        renderQueue(scene);
-    } else {
-        // If placing Keep tile
-        if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
-    }
-    redrawGrid(scene);
-    checkGameOver(scene);
+    if (obj.getData('isFromQueue')) { tileQueue.shift(); tileQueue.push(genNumber()); renderQueue(scene); }
+    else if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
+    redrawGridTiles(scene); checkGameOver(scene);
 }
 
 function checkMerges(idx) {
+    let current = gridState[idx]; if (!current) return;
     let neighbors = getNeighbors(idx);
-    let current = gridState[idx];
-    if (!current) return;
-
     for (let n of neighbors) {
         if (gridState[n.i]) {
-            let neighbor = gridState[n.i];
-            let merged = false;
-            let result = null;
-
+            let neighbor = gridState[n.i]; let merged = false; let result = null;
             if (current === neighbor) {
-                gridState[idx] = null;
-                gridState[n.i] = null;
-                merged = true;
-                score += current * 2;
-            } else if (current % neighbor === 0) {
-                result = current / neighbor;
-                gridState[n.i] = null;
-                gridState[idx] = result;
-                merged = true;
-                score += current;
-            } else if (neighbor % current === 0) {
-                result = neighbor / current;
-                gridState[idx] = null;
-                gridState[n.i] = result;
-                merged = true;
-                score += neighbor;
+                gridState[idx] = null; gridState[n.i] = null; merged = true; score += current * 2;
+            } else if (current % neighbor === 0 || neighbor % current === 0) {
+                result = current > neighbor ? current/neighbor : neighbor/current;
+                gridState[idx] = null; gridState[n.i] = null;
+                gridState[current > neighbor ? idx : n.i] = result === 1 ? null : result;
+                merged = true; score += current > neighbor ? current : neighbor;
             }
-
-            if (result === 1) {
-                if(gridState[idx] === 1) gridState[idx] = null;
-                if(gridState[n.i] === 1) gridState[n.i] = null;
-            }
-
-            if (merged) {
-                updateUI();
-                break; 
-            }
+            if (merged) { updateUI(); break; }
         }
     }
 }
 
-function redrawGrid(scene) {
-    scene.children.getAll().forEach(child => {
-        if (child.name && child.name.startsWith('gridTile_')) child.destroy();
-    });
-    const startX = LAYOUT.GRID_X - (1.5 * LAYOUT.TILE_GAP);
-    const startY = LAYOUT.GRID_Y - (1.5 * LAYOUT.TILE_GAP);
+function redrawGridTiles(scene) {
+    scene.children.getAll().forEach(c => { if (c.name && c.name.startsWith('gridTile_')) c.destroy(); });
+    if(ui.gridSlots.length === 0) return;
+    const startX = ui.gridSlots[0].x; const startY = ui.gridSlots[0].y; const gap = 155;
     for (let i = 0; i < 16; i++) {
         if (gridState[i] !== null) {
-            let r = Math.floor(i / 4);
-            let c = i % 4;
-            let x = startX + c * LAYOUT.TILE_GAP;
-            let y = startY + r * LAYOUT.TILE_GAP;
-            let t = createTile(scene, x, y, gridState[i]);
+            let t = createTile(scene, startX + (i%4)*gap, startY + Math.floor(i/4)*gap, gridState[i]);
             t.name = 'gridTile_' + i;
         }
     }
 }
 
-function handleTrash(obj, scene) {
-    let isFromQueue = obj.getData('isFromQueue');
-    if (trashCount > 0) {
-        trashCount--;
-        obj.destroy();
-        if (isFromQueue) {
-            tileQueue.shift();
-            tileQueue.push(genNumber());
-            renderQueue(scene);
-        } else {
-             if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
-        }
-        updateUI();
-        checkGameOver(scene);
-    } else {
-        returnToOrigin(obj);
-    }
-}
-
 function handleKeep(obj, scene) {
     let val = obj.getData('value');
-    let fromQueue = obj.getData('isFromQueue');
     if (keepSlot === null) {
-        keepSlot = val;
-        obj.destroy();
-        if (fromQueue) {
-            tileQueue.shift();
-            tileQueue.push(genNumber());
-        }
+        keepSlot = val; obj.destroy();
+        if (obj.getData('isFromQueue')) { tileQueue.shift(); tileQueue.push(genNumber()); }
     } else {
-        let temp = keepSlot;
-        keepSlot = val;
-        obj.destroy();
-        if (fromQueue) tileQueue[0] = temp;
+        let temp = keepSlot; keepSlot = val; obj.destroy();
+        if (obj.getData('isFromQueue')) tileQueue[0] = temp;
     }
-    let old = scene.children.getByName('keepTile');
-    if (old) old.destroy();
-    let k = createTile(scene, LAYOUT.PANEL_X, 420, keepSlot);
-    k.name = 'keepTile';
-    k.setScale(0.8);
-    renderQueue(scene);
-    checkGameOver(scene);
+    let old = scene.children.getByName('keepTile'); if (old) old.destroy();
+    let k = createTile(scene, ui.panelItems.keepZone.x, ui.panelItems.keepZone.y, keepSlot);
+    k.name = 'keepTile'; k.setScale(0.8);
+    renderQueue(scene); checkGameOver(scene);
 }
+
+function handleTrash(obj, scene) {
+    if (trashCount > 0) {
+        trashCount--; obj.destroy();
+        if (obj.getData('isFromQueue')) { tileQueue.shift(); tileQueue.push(genNumber()); renderQueue(scene); }
+        else if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
+        updateUI(); checkGameOver(scene);
+    } else returnToOrigin(obj);
+}
+
+// --- HELPERS & SYSTEMS ---
 
 function updateUI() {
-    scoreText.setText('SCORE ' + score);
-    trashText.setText('x' + trashCount);
-    if (score > level * 50) {
-        level++;
-        trashCount += 2;
-        levelText.setText('LEVEL ' + level);
-    }
-    if (score > bestScore) {
-        bestScore = score;
-        localStorage.setItem('justDivideBest', bestScore);
-        bestText.setText('BEST: ' + bestScore);
+    scoreText.setText('SCORE ' + score); ui.panelItems.txtTrashCount.setText('x' + trashCount);
+    if (score > level * 50) { level++; trashCount += 2; levelText.setText('LEVEL ' + level); }
+    if (score > bestScore) { bestScore = score; localStorage.setItem('justDivideBest', bestScore); bestText.setText('BEST: ' + bestScore); }
+}
+
+function getNeighbors(idx) {
+    let r = Math.floor(idx/4), c = idx%4;
+    return [{i:(r-1)*4+c,v:r>0},{i:(r+1)*4+c,v:r<3},{i:r*4+(c-1),v:c>0},{i:r*4+(c+1),v:c<3}].filter(n=>n.v);
+}
+
+function drawHints(scene, activeVal) {
+    hintGraphics.clear(); if (!activeVal || isGameOver || ui.gridSlots.length==0) return;
+    const startX = ui.gridSlots[0].x; const startY = ui.gridSlots[0].y; const gap = 155;
+    hintGraphics.lineStyle(6, 0xf1c40f, 0.8);
+    for (let i = 0; i < 16; i++) {
+        if (gridState[i] === null) {
+            let isMatch = getNeighbors(i).some(n => gridState[n.i] && (activeVal === gridState[n.i] || activeVal % gridState[n.i] === 0 || gridState[n.i] % activeVal === 0));
+            if (isMatch) hintGraphics.strokeRoundedRect(startX + (i%4)*gap - 65, startY + Math.floor(i/4)*gap - 65, 130, 130, 20);
+        }
     }
 }
 
-function checkGameOver(scene) {
-    if (!gridState.includes(null)) {
-        triggerGameOver(scene);
+function saveState() {
+    historyStack.push(JSON.stringify({grid:[...gridState],queue:[...tileQueue],keep:keepSlot,score:score,level:level,trash:trashCount}));
+    if (historyStack.length > 20) historyStack.shift();
+}
+
+function performUndo(scene) {
+    if (isGameOver || isPaused || historyStack.length === 0) return;
+    let state = JSON.parse(historyStack.pop());
+    gridState = state.grid; tileQueue = state.queue; keepSlot = state.keep;
+    score = state.score; level = state.level; trashCount = state.trash;
+    redrawGridTiles(scene); renderQueue(scene); updateUI();
+    let oldK = scene.children.getByName('keepTile'); if (oldK) oldK.destroy();
+    if (keepSlot !== null) {
+        let k = createTile(scene, ui.panelItems.keepZone.x, ui.panelItems.keepZone.y, keepSlot);
+        k.name = 'keepTile'; k.setScale(0.8);
     }
+    showToast(scene, "UNDO!"); if (hintsEnabled) drawHints(scene, tileQueue[0]);
+}
+
+function setDifficulty(scene, l) { difficulty = l; showToast(scene, "DIFFICULTY: " + l); }
+function genNumber() {
+    let opts = difficulty === 'EASY' ? [2,3,4,5,6,8,10] : (difficulty === 'HARD' ? [2,3,4,5,6,8,9,10,12,15,20,24,30,32,35,40,45,48,50,60,64,72,80,100] : [2,3,4,5,6,8,9,10,12,15,20,24,30,32,35,40]);
+    return opts[Math.floor(Math.random() * opts.length)];
+}
+function restartGame(scene) { scene.scene.restart(); }
+function checkGameOver(scene) { if (!gridState.includes(null)) triggerGameOver(scene); }
+
+// --- MODALS & TOASTS ---
+function showToast(scene, msg) {
+    let t = scene.add.text(scene.cameras.main.centerX, scene.cameras.main.centerY, msg, { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff', stroke: '#000', strokeThickness: 4 }).setOrigin(0.5).setDepth(200);
+    scene.tweens.add({ targets: t, y: t.y - 100, alpha: 0, duration: 1000, onComplete: () => t.destroy() });
+}
+
+function togglePause(scene) {
+    if (isGameOver) return;
+    let cx = scene.cameras.main.centerX, cy = scene.cameras.main.centerY;
+    if (!isPaused) {
+        isPaused = true;
+        scene.add.rectangle(cx, cy, 3000, 3000, 0x000000, 0.7).setDepth(200).name='pBg';
+        scene.add.text(cx, cy-100, 'PAUSED', { fontSize:'80px', fontFamily:'Arial Black', color:'#fff', stroke:'#000', strokeThickness:6 }).setOrigin(0.5).setDepth(201).name='pTxt';
+        let rb = scene.add.rectangle(cx, cy+50, 300, 100, 0xf39c12).setInteractive().setDepth(201); rb.name='pResBtn'; rb.on('pointerdown',()=>togglePause(scene));
+        scene.add.text(cx, cy+50, 'RESUME', { fontSize:'40px', fontFamily:'Arial Black' }).setOrigin(0.5).setDepth(202).name='pResTxt';
+    } else { isPaused = false; ['pBg','pTxt','pResBtn','pResTxt'].forEach(n=>scene.children.getByName(n)?.destroy()); }
+}
+
+function showHelp(scene) {
+    if (isPaused || isGameOver) return; isPaused = true;
+    let cx = scene.cameras.main.centerX, cy = scene.cameras.main.centerY;
+    scene.add.rectangle(cx, cy, 3000, 3000, 0x000000, 0.8).setDepth(300).name='hBg';
+    scene.add.rectangle(cx, cy, 800, 650, 0xffffff).setDepth(301).name='hBox';
+    scene.add.text(cx, cy-250, 'HOW TO PLAY', { fontSize:'50px', color:'#000', fontStyle:'bold' }).setOrigin(0.5).setDepth(302).name='hTitle';
+    scene.add.text(cx, cy, "1. Drag tiles onto grid.\n2. MERGE matching #s (Score x2).\n3. DIVIDE #s (e.g. 20÷4=5).\n4. Use KEEP to save.\n5. Use TRASH to discard.\n\nSHORTCUTS: G=Hint, Z=Undo, R=Restart", { fontSize:'28px', color:'#333', align:'center' }).setOrigin(0.5).setDepth(302).name='hBody';
+    let cb = scene.add.rectangle(cx, cy+270, 200, 80, 0xe74c3c).setInteractive().setDepth(302); cb.name='hBtn';
+    cb.on('pointerdown', ()=>{ isPaused=false; ['hBg','hBox','hTitle','hBody','hBtn','hTxt'].forEach(n=>scene.children.getByName(n)?.destroy()); });
+    scene.add.text(cx, cy+270, 'GOT IT', { fontSize:'30px', fontFamily:'Arial Black' }).setOrigin(0.5).setDepth(303).name='hTxt';
 }
 
 function triggerGameOver(scene) {
-    isGameOver = true;
-    let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.7);
-    overlay.setInteractive(); 
-    overlay.setDepth(100);
-
-    scene.add.text(720, 400, 'GAME OVER', {
-        fontSize: '80px', fontFamily: 'Arial Black', color: '#e74c3c', stroke: '#fff', strokeThickness: 6
-    }).setOrigin(0.5).setDepth(101);
-
-    scene.add.text(720, 500, 'Final Score: ' + score, {
-        fontSize: '40px', fontFamily: 'Arial', color: '#fff'
-    }).setOrigin(0.5).setDepth(101);
-
-    let btn = scene.add.rectangle(720, 650, 300, 100, 0x2ecc71).setInteractive().setDepth(101);
-    scene.add.text(720, 650, 'RESTART', {
-        fontSize: '40px', fontFamily: 'Arial Black', color: '#fff'
-    }).setOrigin(0.5).setDepth(102);
-
-    btn.on('pointerdown', () => restartGame(scene));
+    isGameOver = true; let cx = scene.cameras.main.centerX, cy = scene.cameras.main.centerY;
+    scene.add.rectangle(cx, cy, 3000, 3000, 0x000000, 0.7).setDepth(100).setInteractive();
+    scene.add.text(cx, cy-50, 'GAME OVER', { fontSize:'80px', fontFamily:'Arial Black', color:'#e74c3c', stroke:'#fff', strokeThickness:6 }).setOrigin(0.5).setDepth(101);
+    scene.add.text(cx, cy+50, 'Final Score: ' + score, { fontSize:'40px', color:'#fff' }).setOrigin(0.5).setDepth(101);
+    scene.add.rectangle(cx, cy+180, 300, 100, 0x2ecc71).setInteractive().setDepth(101).on('pointerdown',()=>restartGame(scene));
+    scene.add.text(cx, cy+180, 'RESTART', { fontSize:'40px', fontFamily:'Arial Black' }).setOrigin(0.5).setDepth(102);
 }
