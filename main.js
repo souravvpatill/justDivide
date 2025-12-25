@@ -13,7 +13,8 @@ const CONFIG = {
     parent: 'game-container',
     backgroundColor: '#ffe0e5',
     scale: {
-        mode: Phaser.Scale.FIT,
+        // CHANGED: Use RESIZE to fill the whole window (removes black bars)
+        mode: Phaser.Scale.RESIZE,
         autoCenter: Phaser.Scale.CENTER_BOTH
     },
     scene: {
@@ -44,7 +45,7 @@ let score = 0;
 let level = 1;
 let trashCount = 10;
 let bestScore = localStorage.getItem('justDivideBest') || 0;
-let difficulty = 'MEDIUM'; 
+let difficulty = 'MEDIUM';
 
 // Hints
 let hintsEnabled = false;
@@ -64,7 +65,12 @@ let timerEvent;
 // --- 1. PRELOAD ASSETS ---
 function preload() {
     this.load.setPath('assets/');
-    this.load.image('bg', 'Desktop_JustDivide_Game_2.png');
+    
+    // CHANGED: Load all 3 background variations
+    this.load.image('bg_desktop', 'Desktop_JustDivide_Game_2.jpg');
+    this.load.image('bg_landscape', 'Landscape_JustDivide_Game_2.png');
+    this.load.image('bg_portrait', 'Potraite_JustDivide_Game_2.png'); 
+
     this.load.image('cat', 'Cat.png');
     this.load.image('badge', 'Levels and Score.png');
     this.load.image('slot', 'Placement_Box.png');
@@ -72,7 +78,7 @@ function preload() {
     this.load.image('t_orange', 'orange.png');
     this.load.image('t_pink', 'pink.png');
     this.load.image('t_red', 'red.png');
-    this.load.image('t_purple', 'purpule.png'); 
+    this.load.image('t_purple', 'purpule.png');
 }
 
 // --- 2. CREATE SCENE ---
@@ -88,7 +94,7 @@ function create() {
     this.input.keyboard.on('keydown-Z', () => performUndo(this));
     this.input.keyboard.on('keydown-R', () => restartGame(this));
     this.input.keyboard.on('keydown-ESC', () => togglePause(this));
-    this.input.keyboard.on('keydown-G', () => toggleHints(this)); // NEW: Hints
+    this.input.keyboard.on('keydown-G', () => toggleHints(this)); 
     
     // Difficulty
     this.input.keyboard.on('keydown-ONE', () => setDifficulty(this, 'EASY'));
@@ -96,8 +102,22 @@ function create() {
     this.input.keyboard.on('keydown-THREE', () => setDifficulty(this, 'HARD'));
 
     // --- LAYERS ---
-    // A. Background
-    this.add.image(720, 512, 'bg').setDepth(0);
+    
+    // A. Background (Responsive Logic)
+    // We create a background image variable attached to the scene
+    this.bg = this.add.image(0, 0, 'bg_desktop');
+    this.bg.setOrigin(0, 0);
+    this.bg.setDepth(0);
+    this.bg.setScrollFactor(0); // Ensure background doesn't move if camera moves
+
+    // Add a resize listener
+    this.scale.on('resize', (gameSize) => {
+        handleResponsiveResize(this, gameSize.width, gameSize.height);
+    });
+
+    // Call it immediately to set initial state
+    handleResponsiveResize(this, this.scale.width, this.scale.height);
+
     this.add.text(720, 50, 'JUST DIVIDE', {
         fontFamily: 'Arial', fontSize: '56px', color: '#2c3e50', fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1);
@@ -106,7 +126,7 @@ function create() {
     timerText = this.add.text(720, 110, '⌛ 00:00', {
         fontFamily: 'Arial', fontSize: '32px', color: '#000', fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1);
-    
+
     if (timerEvent) timerEvent.remove();
     timerEvent = this.time.addEvent({ delay: 1000, callback: onTimerTick, callbackScope: this, loop: true });
 
@@ -154,7 +174,6 @@ function create() {
 
     // F. Decorations (Cat & Badges)
     const badgeY = LAYOUT.GRID_Y - 390;
-
     this.add.image(LAYOUT.GRID_X - 180, badgeY + 75, 'badge').setDepth(10);
     levelText = this.add.text(LAYOUT.GRID_X - 180, badgeY + 75, 'LEVEL ' + level, {
         fontSize: '32px', fontFamily: 'Arial Black', color: '#fff'
@@ -164,7 +183,7 @@ function create() {
     scoreText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 65, 'SCORE ' + score, {
         fontSize: '28px', fontFamily: 'Arial Black', color: '#fff'
     }).setOrigin(0.5).setDepth(11);
-    
+
     bestText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 100, 'BEST: ' + bestScore, {
         fontSize: '16px', fontFamily: 'Arial', color: '#fff'
     }).setOrigin(0.5).setDepth(11);
@@ -185,6 +204,7 @@ function create() {
     trashZone.input.dropZone = true;
     trashZone.setDepth(3);
     this.add.text(LAYOUT.PANEL_X, 840, '🗑️', { fontSize: '60px' }).setOrigin(0.5).setDepth(4);
+
     trashText = this.add.text(LAYOUT.PANEL_X, 920, 'x' + trashCount, { fontSize: '28px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
 
     // H. Controls
@@ -221,6 +241,7 @@ function create() {
             let r = dropZone.getData('r');
             let c = dropZone.getData('c');
             let idx = r * 4 + c;
+        
             if (gridState[idx] === null) placeTile(obj, idx, this);
             else {
                 historyStack.pop(); 
@@ -243,6 +264,59 @@ function create() {
 }
 
 function update() {}
+
+// --- RESPONSIVE HANDLER ---
+function handleResponsiveResize(scene, width, height) {
+    // --- 1. Background Logic ---
+    // Determine orientation
+    const isPortrait = height > width;
+    
+    // Select the correct image based on screen ratio
+    if (isPortrait) {
+        scene.bg.setTexture('bg_portrait');
+    } else {
+        // If width is much larger than height (Mobile Landscape), use Landscape
+        // Otherwise use Desktop
+        if (width / height > 1.4) {
+             scene.bg.setTexture('bg_landscape');
+        } else {
+             scene.bg.setTexture('bg_desktop');
+        }
+    }
+
+    // Force the background to match the screen size exactly (Stretch)
+    scene.bg.setDisplaySize(width, height);
+
+    // --- 2. Game Content Logic (Camera Zoom) ---
+    // Your game is designed for 1440 x 1024
+    const safeWidth = 1440;
+    const safeHeight = 1024;
+
+    // Calculate how much to zoom to fit the game in the current screen
+    const zoomX = width / safeWidth;
+    const zoomY = height / safeHeight;
+    
+    // Choose the smaller zoom to ensure ALL game content is visible (Fit)
+    const zoom = Math.min(zoomX, zoomY);
+
+    // Apply zoom to the main camera
+    scene.cameras.main.setZoom(zoom);
+    
+    // Center the camera on your game's center point (720, 512)
+    scene.cameras.main.centerOn(720, 512);
+
+    // Re-adjust background position because of camera centering
+    // We calculate the top-left corner relative to the camera
+    scene.bg.x = 720 - (width / 2) / zoom;
+    scene.bg.y = 512 - (height / 2) / zoom;
+    
+    // Since we are zooming, we need to counter-scale the background 
+    // so it looks like it fills the screen regardless of zoom
+    scene.bg.setScale(
+        (width / scene.bg.width) / zoom, 
+        (height / scene.bg.height) / zoom
+    );
+}
 
 // --- HINT SYSTEM ---
 
@@ -279,6 +353,7 @@ function drawHints(scene, activeVal) {
             for (let n of neighbors) {
                 if (gridState[n.i] !== null) {
                     let neighborVal = gridState[n.i];
+                    
                     // Logic: Equal OR Divisible OR Reverse Divisible
                     if (activeVal === neighborVal || 
                         activeVal % neighborVal === 0 || 
@@ -348,6 +423,7 @@ function performUndo(scene) {
     
     let oldKeep = scene.children.getByName('keepTile');
     if (oldKeep) oldKeep.destroy();
+
     if (keepSlot !== null) {
         let k = createTile(scene, LAYOUT.PANEL_X, 420, keepSlot);
         k.name = 'keepTile';
@@ -355,7 +431,6 @@ function performUndo(scene) {
     }
     
     showToast(scene, "UNDO!");
-    
     // Update hints after undo
     if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
 }
@@ -392,7 +467,6 @@ function showToast(scene, msg) {
     let t = scene.add.text(720, 200, msg, {
         fontSize: '40px', fontFamily: 'Arial Black', color: '#fff', stroke: '#000', strokeThickness: 4
     }).setOrigin(0.5).setDepth(200);
-    
     scene.tweens.add({
         targets: t,
         y: 150,
@@ -437,21 +511,17 @@ function togglePause(scene) {
         isPaused = true;
         let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.7).setDepth(200);
         overlay.name = 'pauseOverlay';
-        
         scene.add.text(720, 350, 'PAUSED', {
             fontSize: '80px', fontFamily: 'Arial Black', color: '#fff', stroke: '#000', strokeThickness: 6
         }).setOrigin(0.5).setDepth(201).name = 'pauseText';
-
         let resumeBtn = scene.add.rectangle(720, 550, 300, 100, 0xf39c12).setInteractive().setDepth(201);
         resumeBtn.name = 'resumeBtn';
         scene.add.text(720, 550, 'RESUME', { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(202).name = 'resumeTxt';
         resumeBtn.on('pointerdown', () => togglePause(scene));
-
         let restartBtn = scene.add.rectangle(720, 700, 300, 100, 0xe74c3c).setInteractive().setDepth(201);
         restartBtn.name = 'restartBtn';
         scene.add.text(720, 700, 'RESTART', { fontSize: '40px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(202).name = 'restartTxt';
         restartBtn.on('pointerdown', () => restartGame(scene));
-
     } else {
         isPaused = false;
         ['pauseOverlay', 'pauseText', 'resumeBtn', 'resumeTxt', 'restartBtn', 'restartTxt'].forEach(name => {
@@ -463,11 +533,9 @@ function togglePause(scene) {
 function showHelp(scene) {
     if (isPaused || isGameOver) return;
     isPaused = true;
-
     let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.8).setDepth(300);
     let box = scene.add.rectangle(720, 512, 800, 650, 0xffffff).setDepth(301);
     let title = scene.add.text(720, 250, 'HOW TO PLAY', { fontSize: '50px', color: '#000', fontStyle: 'bold' }).setOrigin(0.5).setDepth(302);
-    
     let instructions = 
         "1. Drag tiles onto the grid.\n" +
         "2. MERGE matching numbers (Score x2).\n" +
@@ -477,14 +545,11 @@ function showHelp(scene) {
         "SHORTCUTS:\n" + 
         "G = Toggle Hints\n" +
         "Z = Undo | R = Restart | ESC = Pause";
-        
     let body = scene.add.text(720, 500, instructions, { 
         fontSize: '28px', color: '#333', align: 'center', lineSpacing: 15 
     }).setOrigin(0.5).setDepth(302);
-
     let closeBtn = scene.add.rectangle(720, 780, 200, 80, 0xe74c3c).setInteractive().setDepth(302);
     let closeTxt = scene.add.text(720, 780, 'GOT IT', { fontSize: '30px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(303);
-
     closeBtn.on('pointerdown', () => {
         overlay.destroy();
         box.destroy();
@@ -538,8 +603,8 @@ function renderQueue(scene) {
     upcomingGroup = scene.add.group();
     if (isGameOver) return;
     const qX = LAYOUT.PANEL_X;
-    const qY = 625; 
-
+    const qY = 625;
+    
     // Active
     let topVal = tileQueue[0];
     let topTile = createTile(scene, qX - 55, qY, topVal); 
@@ -566,7 +631,7 @@ function placeTile(obj, idx, scene) {
     let val = obj.getData('value');
     let isFromQueue = obj.getData('isFromQueue'); 
     gridState[idx] = val;
-    obj.destroy(); 
+    obj.destroy();
     checkMerges(idx);
     if (isFromQueue) {
         tileQueue.shift();
@@ -710,7 +775,7 @@ function triggerGameOver(scene) {
     isGameOver = true;
     let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.7);
     overlay.setInteractive(); 
-    overlay.setDepth(100); 
+    overlay.setDepth(100);
 
     scene.add.text(720, 400, 'GAME OVER', {
         fontSize: '80px', fontFamily: 'Arial Black', color: '#e74c3c', stroke: '#fff', strokeThickness: 6
