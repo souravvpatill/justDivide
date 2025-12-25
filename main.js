@@ -3,7 +3,7 @@
  * HINT SYSTEM EDITION
  * - 'G' to Toggle Hints
  * - Highlights empty spots where merges are possible
- * - Fixed Grid Layout
+ * - RESPONSIVE LAYOUT (Fixed for Portrait)
  */
 
 const CONFIG = {
@@ -11,9 +11,9 @@ const CONFIG = {
     width: 1440,
     height: 1024,
     parent: 'game-container',
-    backgroundColor: '#ffe0e5', // Matches your BG color to hide glitches
+    backgroundColor: '#ffe0e5',
     scale: {
-        mode: Phaser.Scale.RESIZE, // Fill the screen
+        mode: Phaser.Scale.RESIZE,
         autoCenter: Phaser.Scale.CENTER_BOTH
     },
     scene: {
@@ -26,6 +26,8 @@ const CONFIG = {
 const game = new Phaser.Game(CONFIG);
 
 // --- LAYOUT CONFIGURATION ---
+// These are default "Desktop/Landscape" values. 
+// We will modify them dynamically in handleResponsiveResize.
 const LAYOUT = {
     DRAW_SHAPES: true, 
     GRID_X: 550, 
@@ -64,8 +66,6 @@ let timerEvent;
 // --- 1. PRELOAD ASSETS ---
 function preload() {
     this.load.setPath('assets/');
-    
-    // Load all 3 background variations
     this.load.image('bg_desktop', 'Desktop_JustDivide_Game_2.jpg');
     this.load.image('bg_landscape', 'Landscape_JustDivide_Game_2.png');
     this.load.image('bg_portrait', 'Potraite_JustDivide_Game_2.png'); 
@@ -82,9 +82,8 @@ function preload() {
 
 // --- 2. CREATE SCENE ---
 function create() {
-    // Prevent black bars/glitches by setting camera BG color
     this.cameras.main.setBackgroundColor('#ffe0e5');
-
+    
     // Reset Variables
     isGameOver = false;
     isPaused = false;
@@ -97,31 +96,16 @@ function create() {
     this.input.keyboard.on('keydown-R', () => restartGame(this));
     this.input.keyboard.on('keydown-ESC', () => togglePause(this));
     this.input.keyboard.on('keydown-G', () => toggleHints(this)); 
-    
-    // Difficulty
     this.input.keyboard.on('keydown-ONE', () => setDifficulty(this, 'EASY'));
     this.input.keyboard.on('keydown-TWO', () => setDifficulty(this, 'MEDIUM'));
     this.input.keyboard.on('keydown-THREE', () => setDifficulty(this, 'HARD'));
 
     // --- LAYERS ---
     
-    // A. Background (Responsive Logic)
-    // We place the BG at the center of the GAME WORLD (720, 512).
-    // We do NOT use scrollFactor(0) because we want it to scale with the camera zoom naturally,
-    // but we will manually resize it to cover the viewport.
-    this.bg = this.add.image(720, 512, 'bg_desktop');
-    this.bg.setOrigin(0.5, 0.5); // Center the image anchor
-    this.bg.setDepth(0);
-
-    // Add a resize listener to handle screen rotation/resizing
-    this.scale.on('resize', (gameSize) => {
-        handleResponsiveResize(this, gameSize.width, gameSize.height);
-    });
-
-    // Call it immediately to set initial state
-    handleResponsiveResize(this, this.scale.width, this.scale.height);
-
-    this.add.text(720, 50, 'JUST DIVIDE', {
+    // A. Background
+    this.bg = this.add.image(720, 512, 'bg_desktop').setOrigin(0.5).setDepth(0);
+    
+    this.titleText = this.add.text(720, 50, 'JUST DIVIDE', {
         fontFamily: 'Arial', fontSize: '56px', color: '#2c3e50', fontStyle: 'bold'
     }).setOrigin(0.5).setDepth(1);
 
@@ -133,89 +117,55 @@ function create() {
     if (timerEvent) timerEvent.remove();
     timerEvent = this.time.addEvent({ delay: 1000, callback: onTimerTick, callbackScope: this, loop: true });
 
-    // C. Shapes
-    if (LAYOUT.DRAW_SHAPES) {
-        let g = this.add.graphics();
-        g.setDepth(1);
-        
-        // Grid Box
-        g.fillStyle(0x008080, 1);
-        g.fillRoundedRect(LAYOUT.GRID_X - 330, LAYOUT.GRID_Y - 330, 660, 660, 25);
-        g.lineStyle(8, 0xffffff);
-        g.strokeRoundedRect(LAYOUT.GRID_X - 330, LAYOUT.GRID_Y - 330, 660, 660, 25);
+    // C. Shapes (Graphics) - WE STORE THIS TO REDRAW LATER
+    this.uiGraphics = this.add.graphics().setDepth(1);
 
-        // Panel
-        g.fillStyle(0xf39c12, 1);
-        g.fillRoundedRect(LAYOUT.PANEL_X - 110, 280, 220, 650, 30);
-        g.lineStyle(6, 0xd35400);
-        g.strokeRoundedRect(LAYOUT.PANEL_X - 110, 280, 220, 650, 30);
-
-        // Queue
-        g.fillStyle(0xffffff, 1);
-        g.fillRoundedRect(LAYOUT.PANEL_X - 90, 560, 180, 130, 15);
-        g.lineStyle(4, 0xbdc3c7);
-        g.strokeRoundedRect(LAYOUT.PANEL_X - 90, 560, 180, 130, 15);
-    }
-
-    // D. Grid Slots (Depth 3)
-    const startX = LAYOUT.GRID_X - (1.5 * LAYOUT.TILE_GAP);
-    const startY = LAYOUT.GRID_Y - (1.5 * LAYOUT.TILE_GAP);
-
+    // D. Grid Slots (Depth 3) - STORE IN A GROUP TO MOVE THEM
+    this.gridSlots = this.add.group();
+    
+    // Initialize slots (Positions will be set by the resize handler immediately after)
     for (let r = 0; r < 4; r++) {
         for (let c = 0; c < 4; c++) {
-            let x = startX + c * LAYOUT.TILE_GAP;
-            let y = startY + r * LAYOUT.TILE_GAP;
-            let slot = this.add.image(x, y, 'slot').setDisplaySize(140, 140).setDepth(3).setInteractive();
+            let slot = this.add.image(0, 0, 'slot').setDisplaySize(140, 140).setDepth(3).setInteractive();
             slot.input.dropZone = true;
             slot.setData({ r: r, c: c });
+            this.gridSlots.add(slot);
         }
     }
 
-    // E. Hint Graphics Layer (Depth 4 - Above slots, below tiles)
-    hintGraphics = this.add.graphics();
-    hintGraphics.setDepth(4);
+    // E. Hint Graphics
+    hintGraphics = this.add.graphics().setDepth(4);
 
-    // F. Decorations (Cat & Badges)
+    // F. UI Elements Group (Stored on 'this' to move them easily)
     const badgeY = LAYOUT.GRID_Y - 390;
-    this.add.image(LAYOUT.GRID_X - 180, badgeY + 75, 'badge').setDepth(10);
-    levelText = this.add.text(LAYOUT.GRID_X - 180, badgeY + 75, 'LEVEL ' + level, {
-        fontSize: '32px', fontFamily: 'Arial Black', color: '#fff'
-    }).setOrigin(0.5).setDepth(11);
+    
+    this.catImg = this.add.image(LAYOUT.GRID_X, badgeY + 50, 'cat').setOrigin(0.5, 1).setDepth(20);
+    
+    this.badgeLeft = this.add.image(LAYOUT.GRID_X - 180, badgeY + 75, 'badge').setDepth(10);
+    levelText = this.add.text(LAYOUT.GRID_X - 180, badgeY + 75, 'LEVEL ' + level, { fontSize: '32px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(11);
+    
+    this.badgeRight = this.add.image(LAYOUT.GRID_X + 180, badgeY + 75, 'badge').setDepth(10);
+    scoreText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 65, 'SCORE ' + score, { fontSize: '28px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(11);
+    bestText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 100, 'BEST: ' + bestScore, { fontSize: '16px', fontFamily: 'Arial', color: '#fff' }).setOrigin(0.5).setDepth(11);
 
-    this.add.image(LAYOUT.GRID_X + 180, badgeY + 75, 'badge').setDepth(10);
-    scoreText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 65, 'SCORE ' + score, {
-        fontSize: '28px', fontFamily: 'Arial Black', color: '#fff'
-    }).setOrigin(0.5).setDepth(11);
+    // G. Right Panel UI Elements
+    this.txtKeep = this.add.text(LAYOUT.PANEL_X, 330, 'KEEP', { fontSize: '32px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
+    
+    this.keepZone = this.add.image(LAYOUT.PANEL_X, 420, 'slot').setTint(0x2ecc71).setInteractive().setDisplaySize(130, 130).setDepth(3);
+    this.keepZone.name = 'keepZone';
+    this.keepZone.input.dropZone = true;
 
-    bestText = this.add.text(LAYOUT.GRID_X + 180, badgeY + 100, 'BEST: ' + bestScore, {
-        fontSize: '16px', fontFamily: 'Arial', color: '#fff'
-    }).setOrigin(0.5).setDepth(11);
-
-    this.add.image(LAYOUT.GRID_X, badgeY + 50, 'cat').setOrigin(0.5, 1).setDepth(20);
-
-    // G. Right Panel UI
-    this.add.text(LAYOUT.PANEL_X, 330, 'KEEP', { fontSize: '32px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
-    let keepZone = this.add.image(LAYOUT.PANEL_X, 420, 'slot').setTint(0x2ecc71).setInteractive();
-    keepZone.name = 'keepZone';
-    keepZone.setDisplaySize(130, 130);
-    keepZone.input.dropZone = true;
-    keepZone.setDepth(3);
-
-    this.add.text(LAYOUT.PANEL_X, 760, 'TRASH', { fontSize: '32px', fontFamily: 'Arial Black', color: '#c0392b' }).setOrigin(0.5).setDepth(3);
-    let trashZone = this.add.rectangle(LAYOUT.PANEL_X, 840, 120, 120, 0xe74c3c).setInteractive();
-    trashZone.name = 'trashZone';
-    trashZone.input.dropZone = true;
-    trashZone.setDepth(3);
-    this.add.text(LAYOUT.PANEL_X, 840, '🗑️', { fontSize: '60px' }).setOrigin(0.5).setDepth(4);
-
+    this.txtTrash = this.add.text(LAYOUT.PANEL_X, 760, 'TRASH', { fontSize: '32px', fontFamily: 'Arial Black', color: '#c0392b' }).setOrigin(0.5).setDepth(3);
+    
+    this.trashZone = this.add.rectangle(LAYOUT.PANEL_X, 840, 120, 120, 0xe74c3c).setInteractive().setDepth(3);
+    this.trashZone.name = 'trashZone';
+    this.trashZone.input.dropZone = true;
+    
+    this.trashIcon = this.add.text(LAYOUT.PANEL_X, 840, '🗑️', { fontSize: '60px' }).setOrigin(0.5).setDepth(4);
     trashText = this.add.text(LAYOUT.PANEL_X, 920, 'x' + trashCount, { fontSize: '28px', fontFamily: 'Arial Black', color: '#fff' }).setOrigin(0.5).setDepth(3);
 
     // H. Controls
     createGameControls(this);
-
-    // Start
-    if (tileQueue.length === 0) initQueue(this);
-    else renderQueue(this);
 
     // I. Drag Events
     this.input.on('dragstart', (pointer, obj) => {
@@ -224,8 +174,6 @@ function create() {
         obj.setDepth(30);
         obj.setData('originX', obj.x);
         obj.setData('originY', obj.y);
-        
-        // Update hints for the specific tile being dragged (Keep or Queue)
         if (hintsEnabled) drawHints(this, obj.getData('value'));
     });
 
@@ -237,81 +185,179 @@ function create() {
 
     this.input.on('drop', (pointer, obj, dropZone) => {
         if (isGameOver || isPaused) return;
-
         saveState();
-
         if (dropZone.texture && dropZone.texture.key === 'slot' && dropZone.name !== 'keepZone') {
             let r = dropZone.getData('r');
             let c = dropZone.getData('c');
             let idx = r * 4 + c;
-        
             if (gridState[idx] === null) placeTile(obj, idx, this);
-            else {
-                historyStack.pop(); 
-                returnToOrigin(obj);
-            }
+            else { historyStack.pop(); returnToOrigin(obj); }
         } 
         else if (dropZone.name === 'keepZone') handleKeep(obj, this);
         else if (dropZone.name === 'trashZone') handleTrash(obj, this);
-        else {
-            historyStack.pop(); 
-            returnToOrigin(obj);
-        }
+        else { historyStack.pop(); returnToOrigin(obj); }
     });
 
     this.input.on('dragend', (pointer, obj, dropped) => {
         if (!dropped) returnToOrigin(obj);
-        // Reset hints to default queue tile
         if (hintsEnabled && tileQueue.length > 0) drawHints(this, tileQueue[0]);
     });
+
+    // J. Setup Initial Queue
+    if (tileQueue.length === 0) initQueue(this);
+    
+    // INITIAL RESIZE CALL - This sets up the positions for the first time
+    this.scale.on('resize', (gameSize) => {
+        handleResponsiveResize(this, gameSize.width, gameSize.height);
+    });
+    // Trigger once to set initial layout
+    handleResponsiveResize(this, this.scale.width, this.scale.height);
 }
 
 function update() {}
 
-// --- RESPONSIVE HANDLER (FIXED) ---
+// --- RESPONSIVE HANDLER (RE-WRITTEN) ---
 function handleResponsiveResize(scene, width, height) {
-    // 1. Determine orientation
     const isPortrait = height > width;
     
-    // 2. Select Background Texture
-    if (isPortrait) {
-        scene.bg.setTexture('bg_portrait');
-    } else {
-        // Mobile Landscape vs Desktop
-        if (width / height > 1.4) {
-             scene.bg.setTexture('bg_landscape');
-        } else {
-             scene.bg.setTexture('bg_desktop');
-        }
-    }
+    // 1. Background Texture
+    if (isPortrait) scene.bg.setTexture('bg_portrait');
+    else scene.bg.setTexture(width / height > 1.4 ? 'bg_landscape' : 'bg_desktop');
 
-    // 3. Game Zoom Logic
-    // The game world is designed for 1440x1024.
-    // Center of the game world is (720, 512).
+    // 2. Camera Zoom
+    // In Portrait, we want 1440 width to fit the screen width roughly.
     const safeWidth = 1440;
     const safeHeight = 1024;
-
-    const zoomX = width / safeWidth;
-    const zoomY = height / safeHeight;
-    const zoom = Math.min(zoomX, zoomY);
-
-    // Apply Zoom
+    let zoom = Math.min(width / safeWidth, height / safeHeight);
+    
+    if (isPortrait) {
+        // Zoom slightly less to fill width, as we stack vertically
+        zoom = width / 1440; 
+    }
+    
     scene.cameras.main.setZoom(zoom);
-    // CRITICAL: Always center the camera on the middle of the Game World
     scene.cameras.main.centerOn(720, 512);
 
-    // 4. Background Sizing & Positioning (The Fix)
-    // Because the camera is zoomed, the "Visible World Area" is larger or smaller.
-    // We calculate how much "World Width" the camera can see.
+    // 3. Background Sizing
     const worldViewWidth = width / zoom;
     const worldViewHeight = height / zoom;
-
-    // Force the background to be exactly the size of the visible world
     scene.bg.setDisplaySize(worldViewWidth, worldViewHeight);
-    
-    // Ensure the background stays at the center of the world (720, 512)
-    // Since origin is (0.5, 0.5), it will expand outwards to cover the screen perfectly.
     scene.bg.setPosition(720, 512);
+
+    // 4. Update Layout Variables based on Orientation
+    if (isPortrait) {
+        // --- PORTRAIT LAYOUT ---
+        // Grid moves up, Panel moves to bottom horizontal
+        LAYOUT.GRID_X = 720;
+        LAYOUT.GRID_Y = 480; 
+        
+        // Arrange Panel Controls Horizontally at Bottom
+        LAYOUT.PANEL_X = 720; 
+        LAYOUT.PANEL_Y = 950; 
+    } else {
+        // --- LANDSCAPE LAYOUT (Original) ---
+        LAYOUT.GRID_X = 550;
+        LAYOUT.GRID_Y = 650;
+        LAYOUT.PANEL_X = 1180;
+        LAYOUT.PANEL_Y = 600;
+    }
+
+    // 5. Apply Position Updates
+    repositionElements(scene, isPortrait);
+}
+
+function repositionElements(scene, isPortrait) {
+    // A. Redraw Graphics (Boxes)
+    scene.uiGraphics.clear();
+    scene.uiGraphics.setDepth(1);
+    
+    // Draw Grid Box
+    scene.uiGraphics.fillStyle(0x008080, 1);
+    scene.uiGraphics.fillRoundedRect(LAYOUT.GRID_X - 330, LAYOUT.GRID_Y - 330, 660, 660, 25);
+    scene.uiGraphics.lineStyle(8, 0xffffff);
+    scene.uiGraphics.strokeRoundedRect(LAYOUT.GRID_X - 330, LAYOUT.GRID_Y - 330, 660, 660, 25);
+
+    // Draw Panel Box
+    if (isPortrait) {
+        // Horizontal Panel at bottom
+        scene.uiGraphics.fillStyle(0xf39c12, 1);
+        scene.uiGraphics.fillRoundedRect(100, LAYOUT.PANEL_Y - 100, 1240, 200, 30); // Wide bar
+        scene.uiGraphics.lineStyle(6, 0xd35400);
+        scene.uiGraphics.strokeRoundedRect(100, LAYOUT.PANEL_Y - 100, 1240, 200, 30);
+        
+        // Queue Box (Center)
+        scene.uiGraphics.fillStyle(0xffffff, 1);
+        scene.uiGraphics.fillRoundedRect(LAYOUT.PANEL_X - 90, LAYOUT.PANEL_Y - 65, 180, 130, 15);
+        scene.uiGraphics.strokeRoundedRect(LAYOUT.PANEL_X - 90, LAYOUT.PANEL_Y - 65, 180, 130, 15);
+    } else {
+        // Vertical Panel on right (Original)
+        scene.uiGraphics.fillStyle(0xf39c12, 1);
+        scene.uiGraphics.fillRoundedRect(LAYOUT.PANEL_X - 110, 280, 220, 650, 30);
+        scene.uiGraphics.lineStyle(6, 0xd35400);
+        scene.uiGraphics.strokeRoundedRect(LAYOUT.PANEL_X - 110, 280, 220, 650, 30);
+
+        // Queue Box
+        scene.uiGraphics.fillStyle(0xffffff, 1);
+        scene.uiGraphics.fillRoundedRect(LAYOUT.PANEL_X - 90, 560, 180, 130, 15);
+        scene.uiGraphics.strokeRoundedRect(LAYOUT.PANEL_X - 90, 560, 180, 130, 15);
+    }
+
+    // B. Reposition Grid Slots
+    const startX = LAYOUT.GRID_X - (1.5 * LAYOUT.TILE_GAP);
+    const startY = LAYOUT.GRID_Y - (1.5 * LAYOUT.TILE_GAP);
+    
+    scene.gridSlots.getChildren().forEach(slot => {
+        let r = slot.getData('r');
+        let c = slot.getData('c');
+        slot.x = startX + c * LAYOUT.TILE_GAP;
+        slot.y = startY + r * LAYOUT.TILE_GAP;
+    });
+
+    // Reposition active grid tiles
+    redrawGrid(scene);
+
+    // C. Reposition Panel Elements
+    if (isPortrait) {
+        // --- Horizontal Layout (Keep - Queue - Trash) ---
+        renderQueue(scene); 
+
+        // Keep (Left)
+        scene.txtKeep.setPosition(350, LAYOUT.PANEL_Y - 50);
+        scene.keepZone.setPosition(350, LAYOUT.PANEL_Y + 30);
+        let keepTile = scene.children.getByName('keepTile');
+        if(keepTile) keepTile.setPosition(350, LAYOUT.PANEL_Y + 30);
+
+        // Trash (Right)
+        scene.txtTrash.setPosition(1090, LAYOUT.PANEL_Y - 50);
+        scene.trashZone.setPosition(1090, LAYOUT.PANEL_Y + 30);
+        scene.trashIcon.setPosition(1090, LAYOUT.PANEL_Y + 30);
+        trashText.setPosition(1090, LAYOUT.PANEL_Y + 110);
+
+    } else {
+        // --- Vertical Layout (Original) ---
+        scene.txtKeep.setPosition(LAYOUT.PANEL_X, 330);
+        scene.keepZone.setPosition(LAYOUT.PANEL_X, 420);
+        let keepTile = scene.children.getByName('keepTile');
+        if(keepTile) keepTile.setPosition(LAYOUT.PANEL_X, 420);
+
+        renderQueue(scene); 
+
+        scene.txtTrash.setPosition(LAYOUT.PANEL_X, 760);
+        scene.trashZone.setPosition(LAYOUT.PANEL_X, 840);
+        scene.trashIcon.setPosition(LAYOUT.PANEL_X, 840);
+        trashText.setPosition(LAYOUT.PANEL_X, 920);
+    }
+
+    // D. Decoration (Cat & Badges)
+    const badgeY = LAYOUT.GRID_Y - 390;
+    scene.catImg.setPosition(LAYOUT.GRID_X, badgeY + 50);
+    
+    scene.badgeLeft.setPosition(LAYOUT.GRID_X - 180, badgeY + 75);
+    levelText.setPosition(LAYOUT.GRID_X - 180, badgeY + 75);
+    
+    scene.badgeRight.setPosition(LAYOUT.GRID_X + 180, badgeY + 75);
+    scoreText.setPosition(LAYOUT.GRID_X + 180, badgeY + 65);
+    bestText.setPosition(LAYOUT.GRID_X + 180, badgeY + 100);
 }
 
 // --- HINT SYSTEM ---
@@ -321,7 +367,6 @@ function toggleHints(scene) {
     showToast(scene, hintsEnabled ? "HINTS: ON" : "HINTS: OFF");
     
     if (hintsEnabled) {
-        // Draw hints for the active tile
         let val = tileQueue.length > 0 ? tileQueue[0] : null;
         if(val) drawHints(scene, val);
     } else {
@@ -332,25 +377,18 @@ function toggleHints(scene) {
 function drawHints(scene, activeVal) {
     hintGraphics.clear();
     if (!activeVal || isGameOver) return;
-
     const startX = LAYOUT.GRID_X - (1.5 * LAYOUT.TILE_GAP);
     const startY = LAYOUT.GRID_Y - (1.5 * LAYOUT.TILE_GAP);
-
-    // Style: Gold Glow
+    
     hintGraphics.lineStyle(6, 0xf1c40f, 0.8);
-
     for (let i = 0; i < 16; i++) {
-        // Only check empty cells
         if (gridState[i] === null) {
             let neighbors = getNeighbors(i);
             let isMatch = false;
 
-            // Check if placing 'activeVal' here creates a merge
             for (let n of neighbors) {
                 if (gridState[n.i] !== null) {
                     let neighborVal = gridState[n.i];
-                    
-                    // Logic: Equal OR Divisible OR Reverse Divisible
                     if (activeVal === neighborVal || 
                         activeVal % neighborVal === 0 || 
                         neighborVal % activeVal === 0) {
@@ -360,14 +398,11 @@ function drawHints(scene, activeVal) {
                 }
             }
 
-            // Draw highlight if match found
             if (isMatch) {
                 let r = Math.floor(i / 4);
                 let c = i % 4;
                 let x = startX + c * LAYOUT.TILE_GAP;
                 let y = startY + r * LAYOUT.TILE_GAP;
-                
-                // Draw rounded rect around slot
                 hintGraphics.strokeRoundedRect(x - 65, y - 65, 130, 130, 20);
             }
         }
@@ -402,7 +437,6 @@ function saveState() {
 
 function performUndo(scene) {
     if (isGameOver || isPaused || historyStack.length === 0) return;
-
     const json = historyStack.pop();
     const state = JSON.parse(json);
 
@@ -419,15 +453,18 @@ function performUndo(scene) {
     
     let oldKeep = scene.children.getByName('keepTile');
     if (oldKeep) oldKeep.destroy();
-
     if (keepSlot !== null) {
-        let k = createTile(scene, LAYOUT.PANEL_X, 420, keepSlot);
+        // Use current PANEL_X/Y logic or let render handle it?
+        // We will just place it at standard Landscape pos, but resize event will fix it immediately if needed.
+        // Actually, better to fetch current Keep Zone coords.
+        let kX = scene.keepZone ? scene.keepZone.x : LAYOUT.PANEL_X;
+        let kY = scene.keepZone ? scene.keepZone.y : 420;
+        let k = createTile(scene, kX, kY, keepSlot);
         k.name = 'keepTile';
         k.setScale(0.8);
     }
     
     showToast(scene, "UNDO!");
-    // Update hints after undo
     if (hintsEnabled && tileQueue.length > 0) drawHints(scene, tileQueue[0]);
 }
 
@@ -598,12 +635,18 @@ function renderQueue(scene) {
     if (upcomingGroup) upcomingGroup.destroy(true);
     upcomingGroup = scene.add.group();
     if (isGameOver) return;
-    const qX = LAYOUT.PANEL_X;
-    const qY = 625;
     
+    // Position based on current layout state
+    // Check if vertical (original) or horizontal (portrait) by checking if grid is centered (720)
+    const isPortrait = LAYOUT.GRID_X === 720;
+    
+    const qX = LAYOUT.PANEL_X;
+    // If portrait, center vertically in the bottom bar, else use standard side position
+    const qY = isPortrait ? LAYOUT.PANEL_Y : 625;
+
     // Active
     let topVal = tileQueue[0];
-    let topTile = createTile(scene, qX - 55, qY, topVal); 
+    let topTile = createTile(scene, qX - (isPortrait ? 0 : 55), qY, topVal); 
     topTile.setInteractive();
     scene.input.setDraggable(topTile);
     topTile.setData('draggable', true);
@@ -613,10 +656,14 @@ function renderQueue(scene) {
 
     // Preview
     if (tileQueue[1]) {
-        let t2 = createTile(scene, qX + 55, qY, tileQueue[1]);
-        t2.setScale(0.65); 
-        t2.each(child => { if (child.type === 'Image') child.setTint(0x888888); });
-        upcomingGroup.add(t2);
+        // In Portrait, hide preview to save space, or just show it if there is room?
+        // Let's hide it in Portrait for cleaner look, show in Landscape
+        if (!isPortrait) {
+            let t2 = createTile(scene, qX + 55, qY, tileQueue[1]);
+            t2.setScale(0.65); 
+            t2.each(child => { if (child.type === 'Image') child.setTint(0x888888); });
+            upcomingGroup.add(t2);
+        }
     }
     
     // Update hints on new turn
@@ -739,7 +786,12 @@ function handleKeep(obj, scene) {
     }
     let old = scene.children.getByName('keepTile');
     if (old) old.destroy();
-    let k = createTile(scene, LAYOUT.PANEL_X, 420, keepSlot);
+    
+    // Use dynamic positioning
+    let kX = scene.keepZone ? scene.keepZone.x : LAYOUT.PANEL_X;
+    let kY = scene.keepZone ? scene.keepZone.y : 420;
+    
+    let k = createTile(scene, kX, kY, keepSlot);
     k.name = 'keepTile';
     k.setScale(0.8);
     renderQueue(scene);
@@ -772,19 +824,15 @@ function triggerGameOver(scene) {
     let overlay = scene.add.rectangle(720, 512, 1440, 1024, 0x000000, 0.7);
     overlay.setInteractive(); 
     overlay.setDepth(100);
-
     scene.add.text(720, 400, 'GAME OVER', {
         fontSize: '80px', fontFamily: 'Arial Black', color: '#e74c3c', stroke: '#fff', strokeThickness: 6
     }).setOrigin(0.5).setDepth(101);
-
     scene.add.text(720, 500, 'Final Score: ' + score, {
         fontSize: '40px', fontFamily: 'Arial', color: '#fff'
     }).setOrigin(0.5).setDepth(101);
-
     let btn = scene.add.rectangle(720, 650, 300, 100, 0x2ecc71).setInteractive().setDepth(101);
     scene.add.text(720, 650, 'RESTART', {
         fontSize: '40px', fontFamily: 'Arial Black', color: '#fff'
     }).setOrigin(0.5).setDepth(102);
-
     btn.on('pointerdown', () => restartGame(scene));
 }
