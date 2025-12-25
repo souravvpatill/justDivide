@@ -11,10 +11,9 @@ const CONFIG = {
     width: 1440,
     height: 1024,
     parent: 'game-container',
-    backgroundColor: '#ffe0e5',
+    backgroundColor: '#ffe0e5', // Matches your BG color to hide glitches
     scale: {
-        // CHANGED: Use RESIZE to fill the whole window (removes black bars)
-        mode: Phaser.Scale.RESIZE,
+        mode: Phaser.Scale.RESIZE, // Fill the screen
         autoCenter: Phaser.Scale.CENTER_BOTH
     },
     scene: {
@@ -66,7 +65,7 @@ let timerEvent;
 function preload() {
     this.load.setPath('assets/');
     
-    // CHANGED: Load all 3 background variations
+    // Load all 3 background variations
     this.load.image('bg_desktop', 'Desktop_JustDivide_Game_2.jpg');
     this.load.image('bg_landscape', 'Landscape_JustDivide_Game_2.png');
     this.load.image('bg_portrait', 'Potraite_JustDivide_Game_2.png'); 
@@ -83,6 +82,9 @@ function preload() {
 
 // --- 2. CREATE SCENE ---
 function create() {
+    // Prevent black bars/glitches by setting camera BG color
+    this.cameras.main.setBackgroundColor('#ffe0e5');
+
     // Reset Variables
     isGameOver = false;
     isPaused = false;
@@ -104,13 +106,14 @@ function create() {
     // --- LAYERS ---
     
     // A. Background (Responsive Logic)
-    // We create a background image variable attached to the scene
-    this.bg = this.add.image(0, 0, 'bg_desktop');
-    this.bg.setOrigin(0, 0);
+    // We place the BG at the center of the GAME WORLD (720, 512).
+    // We do NOT use scrollFactor(0) because we want it to scale with the camera zoom naturally,
+    // but we will manually resize it to cover the viewport.
+    this.bg = this.add.image(720, 512, 'bg_desktop');
+    this.bg.setOrigin(0.5, 0.5); // Center the image anchor
     this.bg.setDepth(0);
-    this.bg.setScrollFactor(0); // Ensure background doesn't move if camera moves
 
-    // Add a resize listener
+    // Add a resize listener to handle screen rotation/resizing
     this.scale.on('resize', (gameSize) => {
         handleResponsiveResize(this, gameSize.width, gameSize.height);
     });
@@ -265,18 +268,16 @@ function create() {
 
 function update() {}
 
-// --- RESPONSIVE HANDLER ---
+// --- RESPONSIVE HANDLER (FIXED) ---
 function handleResponsiveResize(scene, width, height) {
-    // --- 1. Background Logic ---
-    // Determine orientation
+    // 1. Determine orientation
     const isPortrait = height > width;
     
-    // Select the correct image based on screen ratio
+    // 2. Select Background Texture
     if (isPortrait) {
         scene.bg.setTexture('bg_portrait');
     } else {
-        // If width is much larger than height (Mobile Landscape), use Landscape
-        // Otherwise use Desktop
+        // Mobile Landscape vs Desktop
         if (width / height > 1.4) {
              scene.bg.setTexture('bg_landscape');
         } else {
@@ -284,38 +285,33 @@ function handleResponsiveResize(scene, width, height) {
         }
     }
 
-    // Force the background to match the screen size exactly (Stretch)
-    scene.bg.setDisplaySize(width, height);
-
-    // --- 2. Game Content Logic (Camera Zoom) ---
-    // Your game is designed for 1440 x 1024
+    // 3. Game Zoom Logic
+    // The game world is designed for 1440x1024.
+    // Center of the game world is (720, 512).
     const safeWidth = 1440;
     const safeHeight = 1024;
 
-    // Calculate how much to zoom to fit the game in the current screen
     const zoomX = width / safeWidth;
     const zoomY = height / safeHeight;
-    
-    // Choose the smaller zoom to ensure ALL game content is visible (Fit)
     const zoom = Math.min(zoomX, zoomY);
 
-    // Apply zoom to the main camera
+    // Apply Zoom
     scene.cameras.main.setZoom(zoom);
-    
-    // Center the camera on your game's center point (720, 512)
+    // CRITICAL: Always center the camera on the middle of the Game World
     scene.cameras.main.centerOn(720, 512);
 
-    // Re-adjust background position because of camera centering
-    // We calculate the top-left corner relative to the camera
-    scene.bg.x = 720 - (width / 2) / zoom;
-    scene.bg.y = 512 - (height / 2) / zoom;
+    // 4. Background Sizing & Positioning (The Fix)
+    // Because the camera is zoomed, the "Visible World Area" is larger or smaller.
+    // We calculate how much "World Width" the camera can see.
+    const worldViewWidth = width / zoom;
+    const worldViewHeight = height / zoom;
+
+    // Force the background to be exactly the size of the visible world
+    scene.bg.setDisplaySize(worldViewWidth, worldViewHeight);
     
-    // Since we are zooming, we need to counter-scale the background 
-    // so it looks like it fills the screen regardless of zoom
-    scene.bg.setScale(
-        (width / scene.bg.width) / zoom, 
-        (height / scene.bg.height) / zoom
-    );
+    // Ensure the background stays at the center of the world (720, 512)
+    // Since origin is (0.5, 0.5), it will expand outwards to cover the screen perfectly.
+    scene.bg.setPosition(720, 512);
 }
 
 // --- HINT SYSTEM ---
