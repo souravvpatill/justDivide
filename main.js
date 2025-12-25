@@ -1,9 +1,5 @@
 /**
- * Just Divide - Kid Mode
- * REVOLUTIONARY RESPONSIVE EDITION
- * - 'G' to Toggle Hints
- * - Smooth Transitions (Tweens)
- * - Optimized Portrait Zoom (Grid-focused)
+ * Just Divide - Kids Mode
  */
 
 const CONFIG = {
